@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Work Time Tracker</title>
+  <meta name="theme-color" content="#f4f5f2" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#121513" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Time Tracker">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <style>
+    :root {
+      --paper: #f4f5f2;
+      --surface: #ffffff;
+      --ink: #1b1f1d;
+      --muted: #6b726e;
+      --line: #e2e5e0;
+      --on: #1f8a5b;
+      --on-soft: #e3f2ea;
+      --off: #c2412d;
+      --off-soft: #f8e7e3;
+      --accent: #2f5fd0;
+      --bar-h: 112px;
+      --safe-b: env(safe-area-inset-bottom, 0px);
+      --safe-t: env(safe-area-inset-top, 0px);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #121513;
+        --surface: #1c201e;
+        --ink: #eef1ee;
+        --muted: #9aa29d;
+        --line: #2c322f;
+        --on: #3fbf86;
+        --on-soft: #17301f;
+        --off: #ef6b55;
+        --off-soft: #35201c;
+        --accent: #7aa2ff;
+      }
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    [hidden] { display: none !important; }
+    html, body { margin: 0; background: var(--paper); color: var(--ink); }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+      font-size: 16px;
+      line-height: 1.4;
+      padding: calc(16px + var(--safe-t)) 16px calc(var(--bar-h) + var(--safe-b) + 24px);
+      -webkit-font-smoothing: antialiased;
+    }
+    body.setup-mode { padding-bottom: calc(24px + var(--safe-b)); }
+    button { font-family: inherit; touch-action: manipulation; }
+    button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+    .wrap { max-width: 480px; margin: 0 auto; }
+
+    /* Hero: state + live timer */
+    .hero {
+      border-radius: 24px;
+      padding: 22px 22px 20px;
+      background: var(--off-soft);
+      transition: background-color .25s ease;
+    }
+    .hero.is-on { background: var(--on-soft); }
+    .state { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; color: var(--off); }
+    .hero.is-on .state { color: var(--on); }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+    .hero.is-on .dot { animation: pulse 2s ease-in-out infinite; }
+    @keyframes pulse { 50% { opacity: .35; } }
+    .timer {
+      font-size: clamp(48px, 16vw, 76px);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1;
+      margin: 14px 0 10px;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .since { font-size: 15px; color: var(--muted); }
+
+    /* Entry list */
+    .section-head { display: flex; justify-content: space-between; align-items: baseline; margin: 28px 4px 8px; }
+    .section-head h2 { font-size: 17px; margin: 0; }
+    .section-head span { font-size: 13px; color: var(--muted); }
+
+    .logs { background: var(--surface); border-radius: 18px; overflow: hidden; }
+    .log { padding: 14px 16px; border-top: 1px solid var(--line); }
+    .log:first-child { border-top: 0; }
+    .log-main { display: flex; align-items: center; gap: 12px; min-height: 44px; }
+    .pill { font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 999px; min-width: 44px; text-align: center; flex-shrink: 0; }
+    .pill.in { background: var(--on-soft); color: var(--on); }
+    .pill.out { background: var(--off-soft); color: var(--off); }
+    .when { flex: 1; min-width: 0; }
+    .when .t { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .when .d, .when .z { font-size: 13px; color: var(--muted); }
+    .btn-link {
+      background: none; border: 0; color: var(--accent); font-size: 15px; font-weight: 600;
+      padding: 10px 4px 10px 12px; min-height: 44px; cursor: pointer;
+    }
+    .pending { font-size: 13px; color: var(--muted); }
+
+    .edit { margin-top: 12px; display: grid; gap: 10px; }
+    .field {
+      display: block; width: 100%; min-width: 0;
+      font-size: 16px; /* 16px+ stops iOS zooming on focus */
+      font-family: inherit;
+      padding: 12px 14px; min-height: 48px;
+      border: 1px solid var(--line); border-radius: 12px;
+      background: var(--paper); color: var(--ink);
+      -webkit-appearance: none; appearance: none;
+    }
+    .field::-webkit-date-and-time-value { text-align: left; }
+    .edit-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .btn { min-height: 46px; border-radius: 12px; border: 0; font-size: 16px; font-weight: 600; cursor: pointer; padding: 0 16px; }
+    .btn-ghost { background: var(--paper); color: var(--ink); }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn:disabled { opacity: .5; }
+    .note { font-size: 13px; color: var(--off); }
+
+    .empty { padding: 24px 16px; text-align: center; color: var(--muted); font-size: 15px; }
+    .footer { text-align: center; margin-top: 20px; }
+    .footer .btn-link { color: var(--muted); font-size: 14px; font-weight: 500; padding: 10px; }
+
+    /* Setup */
+    .setup { background: var(--surface); border-radius: 24px; padding: 24px 20px; margin-top: 8vh; }
+    .setup h1 { font-size: 24px; margin: 0 0 8px; }
+    .setup p { color: var(--muted); margin: 0 0 18px; }
+    .setup form { display: grid; gap: 12px; }
+    .setup .btn { min-height: 52px; }
+
+    /* Bottom action bar, in thumb reach */
+    .bar {
+      position: fixed; left: 0; right: 0; bottom: 0;
+      padding: 10px 16px calc(14px + var(--safe-b));
+      background: linear-gradient(to top, var(--paper) 70%, transparent);
+    }
+    .bar-inner { max-width: 480px; margin: 0 auto; }
+    .sync { min-height: 20px; font-size: 13px; font-weight: 600; text-align: center; color: var(--muted); }
+    .sync.ok { color: var(--on); }
+    .sync.err { color: var(--off); }
+    .btn-main {
+      width: 100%; height: 72px; border: 0; border-radius: 20px;
+      font-size: 22px; font-weight: 700; color: #fff; cursor: pointer;
+      background: var(--on);
+      transition: transform .1s ease, background-color .2s ease, opacity .2s ease;
+    }
+    .btn-main.out { background: var(--off); }
+    .btn-main:active { transform: scale(.98); }
+    .btn-main:disabled { opacity: .6; }
+
+    @media (prefers-reduced-motion: reduce) {
+      * { animation: none !important; transition: none !important; }
+    }
+    @media (max-height: 500px) {
+      .timer { font-size: 44px; margin: 8px 0 6px; }
+      :root { --bar-h: 90px; }
+      .btn-main { height: 56px; }
+    }
+  </style>
+</head>
+<body>
+  <!-- First run: connect this device -->
+  <main id="setup" class="wrap" hidden>
+    <section class="setup">
+      <h1>Connect your tracker</h1>
+      <p>Enter the access key from your Apps Script project. You only need to do this once on each device.</p>
+      <form id="setup-form">
+        <input id="key-input" class="field" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Access key" aria-label="Access key" required>
+        <button id="key-btn" class="btn btn-primary" type="submit">Connect</button>
+        <div id="setup-msg" class="note" role="status"></div>
+      </form>
+    </section>
+  </main>
+
+  <!-- Main app -->
+  <main id="app" class="wrap" hidden>
+    <section id="hero" class="hero" aria-live="polite">
+      <div class="state"><span class="dot"></span><span id="state-text">Loading</span></div>
+      <div id="timer" class="timer">0:00:00</div>
+      <div id="since" class="since">Fetching your latest entry</div>
+    </section>
+
+    <div class="section-head">
+      <h2>Recent entries</h2>
+      <span>Tap Edit to fix a time</span>
+    </div>
+    <div id="logs" class="logs"><div class="empty">Loading entries</div></div>
+
+    <div class="footer">
+      <button class="btn-link" type="button" onclick="disconnect()">Disconnect this device</button>
+    </div>
+  </main>
+
+  <div id="bar" class="bar" hidden>
+    <div class="bar-inner">
+      <div id="sync" class="sync" role="status"></div>
+      <button id="main-btn" class="btn-main" type="button" onclick="triggerAction()" disabled>Clock in</button>
+    </div>
+  </div>
+
+  <script>
+    /* ===== Configuration: paste your Apps Script web app URL (ends in /exec) ===== */
+    var SCRIPT_URL = "https://script.google.com/macros/s/PASTE_YOUR_DEPLOYMENT_ID/exec";
+
+    var KEY_STORE = "tt_key";
+    var STATE_STORE = "tt_state_v2";
+    var DEVICE_TZ = (function() {
+      try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch (e) { return "UTC"; }
+    })();
+
+    var state = null;      // { status, logs: [{ row, action: "in"|"out", at: ISO UTC, tz }] }
+    var skew = 0;          // server clock minus device clock, in ms
+    var busy = false;
+    var editingRow = null;
+    var editValue = "";
+    var editNote = "";
+    var syncTimer = null;
+    var lastSync = 0;
+
+    /* ---------- storage ---------- */
+    function load(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+    function store(k, v) {
+      try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {}
+    }
+
+    /* ---------- time helpers ---------- */
+    function pad(n) { return (n < 10 ? "0" : "") + n; }
+    function now() { return Date.now() + skew; }
+    // Date -> "yyyy-MM-ddTHH:mm" in the device's zone, for <input type="datetime-local">
+    function toLocalInput(d) {
+      return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+             "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
+    }
+    // "yyyy-MM-ddTHH:mm" in the device's zone -> Date
+    function fromLocalInput(s) {
+      var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(s || "");
+      if (!m) return null;
+      var d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
+      return isNaN(d.getTime()) ? null : d;
+    }
+    function fmtTime(d, tz) {
+      var opts = { hour: "numeric", minute: "2-digit" };
+      if (tz) opts.timeZone = tz;
+      return d.toLocaleTimeString([], opts);
+    }
+    function fmtDay(d) {
+      var today = new Date(now()); today.setHours(0, 0, 0, 0);
+      var that = new Date(d.getTime()); that.setHours(0, 0, 0, 0);
+      var diff = Math.round((today - that) / 86400000);
+      if (diff === 0) return "Today";
+      if (diff === 1) return "Yesterday";
+      return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+    }
+    function placeName(tz) { return tz.split("/").pop().replace(/_/g, " "); }
+    function esc(s) {
+      return String(s).replace(/[&<>"']/g, function(c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
+    }
+
+    /* ---------- API ---------- */
+    function api(payload) {
+      payload.token = load(KEY_STORE);
+      var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+      var timeout = ctrl ? setTimeout(function() { ctrl.abort(); }, 20000) : null;
+      // text/plain keeps this a "simple" CORS request, which Apps Script can answer.
+      return fetch(SCRIPT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(payload),
+        redirect: "follow",
+        signal: ctrl ? ctrl.signal : undefined
+      })
+        .then(function(r) { if (!r.ok) throw new Error("http_" + r.status); return r.json(); })
+        .then(function(d) {
+          clearTimeout(timeout);
+          if (!d.ok) { var err = new Error(d.error || "error"); err.code = d.error; throw err; }
+          return d;
+        }, function(e) { clearTimeout(timeout); throw e; });
+    }
+
+    function accept(d) {
+      var serverSkew = Date.parse(d.serverTime) - Date.now();
+      // Only correct for real clock drift, not normal network delay.
+      skew = Math.abs(serverSkew) > 60000 ? serverSkew : 0;
+      lastSync = Date.now();
+      store(STATE_STORE, JSON.stringify({ skew: skew, state: { status: d.status, logs: d.logs } }));
+      render({ status: d.status, logs: d.logs });
+    }
+
+    function handleError(e, fallbackMsg) {
+      if (e && e.code === "unauthorized") {
+        store(KEY_STORE, null);
+        showSetup("That key was not accepted. Enter it again.");
+        return;
+      }
+      if (e && (e.name === "TypeError" || e.name === "AbortError")) {
+        showSync(navigator.onLine === false
+          ? "You're offline. Showing your last saved data."
+          : "Couldn't reach Google. Check the script URL and that it's shared with Anyone.", "err");
+        return;
+      }
+      showSync(fallbackMsg + (e && e.message ? " (" + e.message + ")" : ""), "err");
+    }
+
+    function refresh() {
+      if (busy || !load(KEY_STORE)) return;
+      return api({ action: "state" })
+        .then(accept)
+        .catch(function(e) { handleError(e, "Couldn't load your entries."); });
+    }
+
+    /* ---------- actions ---------- */
+    function triggerAction() {
+      if (busy || !state) return;
+      var prev = state;
+      var wasOn = state.status === "ON";
+      var type = wasOn ? "out" : "in";
+
+      editingRow = null;
+      setBusy(true);
+      render({
+        status: wasOn ? "OFF" : "ON",
+        logs: [{ row: -1, action: type, at: new Date(now()).toISOString(), tz: DEVICE_TZ, pending: true }]
+          .concat(prev.logs.slice(0, 5))
+      });
+      showSync(wasOn ? "Saving clock out..." : "Saving clock in...");
+      if (navigator.vibrate) navigator.vibrate(15);
+
+      api({ action: "clock", type: type, tz: DEVICE_TZ })
+        .then(function(d) {
+          setBusy(false); accept(d);
+          showSync(wasOn ? "Clocked out" : "Clocked in", "ok");
+        })
+        .catch(function(e) {
+          setBusy(false); render(prev);
+          handleError(e, "Not saved. Tap again to retry.");
+        });
+    }
+
+    function startEdit(row) {
+      var item = findLog(row);
+      if (!item || busy) return;
+      editingRow = row;
+      editValue = item.at ? toLocalInput(new Date(item.at)) : toLocalInput(new Date(now()));
+      editNote = "";
+      renderLogs();
+      var el = document.getElementById("edit-input");
+      if (el) el.focus();
+    }
+    function cancelEdit() { editingRow = null; editNote = ""; renderLogs(); }
+
+    function saveEdit() {
+      if (busy || editingRow === null) return;
+      var d = fromLocalInput(editValue);
+      if (!d) { editNote = "Pick a date and time."; renderLogs(); return; }
+      if (d.getTime() > now() + 60000) { editNote = "That time is in the future."; renderLogs(); return; }
+
+      setBusy(true);
+      showSync("Saving new time...");
+      api({ action: "edit", row: editingRow, at: d.toISOString() })
+        .then(function(res) {
+          editingRow = null; setBusy(false); accept(res);
+          showSync("Time updated", "ok");
+        })
+        .catch(function(e) {
+          setBusy(false); renderLogs();
+          handleError(e, "Time not updated.");
+        });
+    }
+
+    function findLog(row) {
+      var logs = (state && state.logs) || [];
+      for (var i = 0; i < logs.length; i++) if (logs[i].row === row) return logs[i];
+      return null;
+    }
+
+    /* ---------- rendering ---------- */
+    function setBusy(b) {
+      busy = b;
+      document.getElementById("main-btn").disabled = b || !state;
+    }
+
+    function showSync(msg, kind) {
+      var el = document.getElementById("sync");
+      el.textContent = msg;
+      el.className = "sync" + (kind ? " " + kind : "");
+      clearTimeout(syncTimer);
+      if (kind) syncTimer = setTimeout(function() { el.textContent = ""; el.className = "sync"; }, kind === "err" ? 5000 : 2500);
+    }
+
+    function render(s) {
+      if (!s) return;
+      state = { status: s.status, logs: s.logs || [] };
+      var on = state.status === "ON";
+
+      document.getElementById("hero").className = "hero" + (on ? " is-on" : "");
+      document.getElementById("state-text").textContent = on ? "On the clock" : "Off the clock";
+
+      var btn = document.getElementById("main-btn");
+      btn.textContent = on ? "Clock out" : "Clock in";
+      btn.className = "btn-main" + (on ? " out" : "");
+      btn.disabled = busy;
+
+      updateTimer();
+      renderLogs();
+    }
+
+    function updateTimer() {
+      if (!state) return;
+      var timerEl = document.getElementById("timer");
+      var sinceEl = document.getElementById("since");
+      var latest = state.logs[0];
+      var start = latest && latest.at ? new Date(latest.at) : null;
+
+      if (!start || isNaN(start.getTime())) {
+        timerEl.textContent = "0:00:00";
+        sinceEl.textContent = "No entries yet. Clock in to start.";
+        return;
+      }
+
+      var secs = Math.max(0, Math.floor((now() - start.getTime()) / 1000));
+      timerEl.textContent = secs >= 86400
+        ? Math.floor(secs / 86400) + "d " + Math.floor((secs % 86400) / 3600) + "h"
+        : Math.floor(secs / 3600) + ":" + pad(Math.floor((secs % 3600) / 60)) + ":" + pad(secs % 60);
+
+      var day = fmtDay(start);
+      sinceEl.textContent = (day === "Today" || day === "Yesterday")
+        ? "Since " + fmtTime(start) + " " + day.toLowerCase()
+        : "Since " + day + " at " + fmtTime(start);
+    }
+
+    function renderLogs() {
+      var box = document.getElementById("logs");
+      var logs = (state && state.logs) || [];
+      if (!logs.length) {
+        box.innerHTML = "<div class='empty'>No entries yet. Your clock-ins will show up here.</div>";
+        return;
+      }
+
+      var html = "";
+      logs.forEach(function(item) {
+        var inn = item.action === "in";
+        var d = item.at ? new Date(item.at) : null;
+        var editing = editingRow === item.row;
+
+        // If it was recorded in another zone, also show the time as it was there.
+        var elsewhere = "";
+        if (d && item.tz && item.tz !== DEVICE_TZ) {
+          try {
+            var there = fmtTime(d, item.tz);
+            if (there !== fmtTime(d)) elsewhere = there + " in " + placeName(item.tz);
+          } catch (e) {}
+        }
+
+        html += "<div class='log'><div class='log-main'>";
+        html += "<span class='pill " + (inn ? "in" : "out") + "'>" + (inn ? "In" : "Out") + "</span>";
+        html += "<div class='when'><div class='t'>" + (d ? esc(fmtTime(d)) : "Missing time") + "</div>";
+        html += "<div class='d'>" + (d ? esc(fmtDay(d)) : "Edit to fix") + "</div>";
+        if (elsewhere) html += "<div class='z'>" + esc(elsewhere) + "</div>";
+        html += "</div>";
+        if (item.pending) html += "<span class='pending'>Saving</span>";
+        else if (!editing) html += "<button class='btn-link' type='button' onclick='startEdit(" + Number(item.row) + ")'>Edit</button>";
+        html += "</div>";
+
+        if (editing) {
+          html += "<div class='edit'>";
+          html += "<input id='edit-input' class='field' type='datetime-local' value='" + esc(editValue) +
+                  "' max='" + esc(toLocalInput(new Date(now()))) + "' oninput='editValue=this.value' aria-label='New date and time'>";
+          if (editNote) html += "<div class='note'>" + esc(editNote) + "</div>";
+          html += "<div class='edit-actions'>";
+          html += "<button class='btn btn-ghost' type='button' onclick='cancelEdit()'>Cancel</button>";
+          html += "<button class='btn btn-primary' type='button' onclick='saveEdit()'" + (busy ? " disabled" : "") + ">Save time</button>";
+          html += "</div></div>";
+        }
+        html += "</div>";
+      });
+      box.innerHTML = html;
+    }
+
+    /* ---------- setup / screens ---------- */
+    function showSetup(msg) {
+      document.body.classList.add("setup-mode");
+      document.getElementById("setup").hidden = false;
+      document.getElementById("app").hidden = true;
+      document.getElementById("bar").hidden = true;
+      document.getElementById("setup-msg").textContent = msg || "";
+    }
+    function showApp() {
+      document.body.classList.remove("setup-mode");
+      document.getElementById("setup").hidden = true;
+      document.getElementById("app").hidden = false;
+      document.getElementById("bar").hidden = false;
+    }
+    function disconnect() {
+      store(KEY_STORE, null);
+      store(STATE_STORE, null);
+      state = null;
+      showSetup("");
+    }
+
+    document.getElementById("setup-form").addEventListener("submit", function(ev) {
+      ev.preventDefault();
+      var key = document.getElementById("key-input").value.trim();
+      if (!key) return;
+      var btn = document.getElementById("key-btn");
+      btn.disabled = true;
+      document.getElementById("setup-msg").textContent = "Connecting...";
+      store(KEY_STORE, key);
+      api({ action: "state" })
+        .then(function(d) { btn.disabled = false; showApp(); accept(d); })
+        .catch(function(e) {
+          btn.disabled = false;
+          if (e && e.code === "unauthorized") { store(KEY_STORE, null); showSetup("That key didn't work. Check it and try again."); }
+          else { store(KEY_STORE, null); showSetup("Couldn't reach your Apps Script. Check SCRIPT_URL in index.html and that the deployment is shared with Anyone."); }
+        });
+    });
+
+    /* ---------- start ---------- */
+    (function init() {
+      // Opening the site as .../#key=YOUR_KEY saves the key and removes it from the address bar.
+      var m = /[#&]key=([^&]+)/.exec(location.hash);
+      if (m) {
+        store(KEY_STORE, decodeURIComponent(m[1]));
+        history.replaceState(null, "", location.pathname + location.search);
+      }
+
+      if (!load(KEY_STORE)) {
+        showSetup("");
+      } else {
+        showApp();
+        try {
+          var cached = JSON.parse(load(STATE_STORE) || "null");
+          if (cached && cached.state) { skew = cached.skew || 0; render(cached.state); }
+        } catch (e) {}
+        refresh();
+      }
+
+      setInterval(updateTimer, 1000);
+      document.addEventListener("visibilitychange", function() {
+        if (document.hidden) return;
+        updateTimer();
+        if (Date.now() - lastSync > 15000) refresh();
+      });
+      window.addEventListener("online", refresh);
+
+      if ("serviceWorker" in navigator && location.protocol === "https:") {
+        navigator.serviceWorker.register("sw.js").catch(function() {});
+      }
+    })();
+  </script>
+</body>
+</html>
