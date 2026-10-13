@@ -25,6 +25,7 @@
       --off: #c2412d;
       --off-soft: #f8e7e3;
       --accent: #2f5fd0;
+      --warn: #9a5b00;
       --bar-h: 112px;
       --safe-b: env(safe-area-inset-bottom, 0px);
       --safe-t: env(safe-area-inset-top, 0px);
@@ -41,6 +42,7 @@
         --off: #ef6b55;
         --off-soft: #35201c;
         --accent: #7aa2ff;
+        --warn: #e5a54a;
       }
     }
 
@@ -89,16 +91,30 @@
     .section-head h2 { font-size: 17px; margin: 0; }
     .section-head span { font-size: 13px; color: var(--muted); }
 
-    .logs { background: var(--surface); border-radius: 18px; overflow: hidden; }
-    .log { padding: 14px 16px; border-top: 1px solid var(--line); }
-    .log:first-child { border-top: 0; }
-    .log-main { display: flex; align-items: center; gap: 12px; min-height: 44px; }
-    .pill { font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 999px; min-width: 44px; text-align: center; flex-shrink: 0; }
+    /* Sessions: a clock-in and its clock-out, joined by a line */
+    .logs { display: grid; gap: 10px; }
+    .session { background: var(--surface); border-radius: 18px; padding: 12px 16px 8px; }
+    .s-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+    .s-day { font-size: 13px; font-weight: 600; color: var(--muted); }
+    .s-dur { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .s-dur.live { color: var(--on); }
+    .s-dur.none { color: var(--muted); font-weight: 600; font-size: 15px; }
+    .s-note { font-size: 13px; color: var(--warn); padding: 2px 0 6px; }
+    .s-note.quiet { color: var(--muted); }
+    .log-main { position: relative; display: flex; align-items: center; gap: 12px; min-height: 48px; }
+    .entry.in .log-main::after, .entry.out .log-main::before {
+      content: ""; position: absolute; left: 21px; width: 2px; background: var(--line);
+    }
+    .entry.in .log-main::after { top: 50%; bottom: 0; }
+    .entry.out .log-main::before { top: 0; bottom: 50%; }
+    .pill { position: relative; z-index: 1; font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 999px; min-width: 44px; text-align: center; flex-shrink: 0; }
     .pill.in { background: var(--on-soft); color: var(--on); }
     .pill.out { background: var(--off-soft); color: var(--off); }
+    .pill.ghost { background: var(--surface); color: var(--muted); border: 1.5px dashed var(--line); padding: 2.5px 8.5px; }
     .when { flex: 1; min-width: 0; }
     .when .t { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
     .when .d, .when .z { font-size: 13px; color: var(--muted); }
+    .when .gap { font-size: 15px; color: var(--muted); }
     .btn-link {
       background: none; border: 0; color: var(--accent); font-size: 15px; font-weight: 600;
       padding: 10px 4px 10px 12px; min-height: 44px; cursor: pointer;
@@ -136,7 +152,7 @@
 
     /* Bottom action bar, in thumb reach */
     .bar {
-      position: fixed; left: 0; right: 0; bottom: 0;
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
       padding: 10px 16px calc(14px + var(--safe-b));
       background: linear-gradient(to top, var(--paper) 70%, transparent);
     }
@@ -187,7 +203,7 @@
     </section>
 
     <div class="section-head">
-      <h2>Recent entries</h2>
+      <h2>Recent sessions</h2>
       <span>Tap Edit to fix a time</span>
     </div>
     <div id="logs" class="logs"><div class="empty">Loading entries</div></div>
@@ -214,7 +230,12 @@
       try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch (e) { return "UTC"; }
     })();
 
+    var MIN = 60000;
+    var CAP = 24 * 3600000; // a session stops automatically after 24 hours
+    var STALE_AFTER = 15 * MIN; // refresh when the app comes back after this long
+
     var state = null;      // { status, logs: [{ row, action: "in"|"out", at: ISO UTC, tz }] }
+    var sessions = [];     // state.logs paired into sessions, newest first (see buildSessions)
     var skew = 0;          // server clock minus device clock, in ms
     var busy = false;
     var editingRow = null;
@@ -256,6 +277,29 @@
       if (diff === 0) return "Today";
       if (diff === 1) return "Yesterday";
       return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+    }
+    // "9:00 today", "9:00 yesterday", "9:00 on Mon, Oct 5"
+    function fmtAt(t) {
+      var d = new Date(t), day = fmtDay(d);
+      return fmtTime(d) + (day === "Today" || day === "Yesterday" ? " " + day.toLowerCase() : " on " + day);
+    }
+    function fmtDur(ms) {
+      var m = Math.round(ms / MIN);
+      return m < 60 ? m + "m" : Math.floor(m / 60) + "h " + pad(m % 60) + "m";
+    }
+    function floorMin(t) { return Math.floor(t / MIN) * MIN; }
+    function ceilMin(t) { return Math.ceil(t / MIN) * MIN; }
+    function timeOf(item) {
+      var t = item && item.at ? Date.parse(item.at) : NaN;
+      return isNaN(t) ? null : t;
+    }
+    // Times round outward to the minute, to cover the moment spent opening the app:
+    // clock-ins round down, clock-outs round up. The server logs them this way;
+    // rounding here too covers entries logged before it did.
+    function shownTime(item) {
+      var t = timeOf(item);
+      if (t == null) return null;
+      return item.action === "in" ? floorMin(t) : ceilMin(t);
     }
     function placeName(tz) { return tz.split("/").pop().replace(/_/g, " "); }
     function esc(s) {
@@ -320,7 +364,8 @@
     function triggerAction() {
       if (busy || !state) return;
       var prev = state;
-      var wasOn = state.status === "ON";
+      // A session past 24 hours counts as stopped; the server closes it before clocking in.
+      var wasOn = isOn();
       var type = wasOn ? "out" : "in";
 
       editingRow = null;
@@ -328,7 +373,7 @@
       render({
         status: wasOn ? "OFF" : "ON",
         logs: [{ row: -1, action: type, at: new Date(now()).toISOString(), tz: DEVICE_TZ, pending: true }]
-          .concat(prev.logs.slice(0, 5))
+          .concat(prev.logs)
       });
       showSync(wasOn ? "Saving clock out..." : "Saving clock in...");
       if (navigator.vibrate) navigator.vibrate(15);
@@ -348,7 +393,8 @@
       var item = findLog(row);
       if (!item || busy) return;
       editingRow = row;
-      editValue = item.at ? toLocalInput(new Date(item.at)) : toLocalInput(new Date(now()));
+      var shown = shownTime(item);
+      editValue = toLocalInput(new Date(shown != null ? shown : now()));
       editNote = "";
       renderLogs();
       var el = document.getElementById("edit-input");
@@ -361,6 +407,8 @@
       var d = fromLocalInput(editValue);
       if (!d) { editNote = "Pick a date and time."; renderLogs(); return; }
       if (d.getTime() > now() + 60000) { editNote = "That time is in the future."; renderLogs(); return; }
+      var problem = checkEdit(editingRow, d.getTime());
+      if (problem) { editNote = problem; renderLogs(); return; }
 
       setBusy(true);
       showSync("Saving new time...");
@@ -381,6 +429,96 @@
       return null;
     }
 
+    // Edits must keep entries in the order they were recorded, which is what stops
+    // sessions from overlapping, and must keep each session within 24 hours.
+    function checkEdit(row, t) {
+      var list = chrono(state.logs.filter(function(l) { return !l.pending; }));
+      var i = 0;
+      while (i < list.length && list[i].row !== row) i++;
+      var item = list[i], prev = list[i - 1], next = list[i + 1];
+      var pt = shownTime(prev), nt = shownTime(next);
+      function name(x) { return x.action === "in" ? "clock-in" : "clock-out"; }
+
+      if (pt != null && t < pt) return "That's before your " + name(prev) + " at " + fmtAt(pt) + ". Sessions can't overlap.";
+      if (nt != null && t > nt) return "That's after your " + name(next) + " at " + fmtAt(nt) + ". Sessions can't overlap.";
+      if (item.action === "out" && prev && prev.action === "in" && pt != null && t - pt > CAP) {
+        return "Sessions stop after 24 hours. Pick a time within a day of the clock-in at " + fmtAt(pt) + ".";
+      }
+      if (item.action === "in") {
+        var end = !next ? now() : next.action === "out" ? nt : null;
+        if (end != null && end - t > CAP) {
+          return next
+            ? "Sessions stop after 24 hours. Pick a time within a day of the clock-out at " + fmtAt(nt) + "."
+            : "Sessions stop after 24 hours. Pick a time within the last day.";
+        }
+      }
+      return "";
+    }
+
+    /* ---------- sessions ---------- */
+    // Entries in the order they were recorded (sheet row), oldest first.
+    function chrono(logs) {
+      return logs.slice().sort(function(a, b) { return rowKey(a) - rowKey(b); });
+    }
+    function rowKey(item) { return item.pending ? Infinity : item.row; }
+
+    // Pairs each clock-in with the clock-out recorded after it, newest session first.
+    // Durations use the rounded times, stop at 24 hours, and never count a minute
+    // twice: a session that overlaps the one before it counts from where that one ended.
+    function buildSessions(logs) {
+      var list = [], open = null;
+      chrono(logs).forEach(function(item, i) {
+        if (item.action === "in") {
+          if (open) list.push({ inn: open, gap: "No clock-out recorded" });
+          open = item;
+        } else {
+          list.push(open ? { inn: open, out: item }
+            : { out: item, gap: i === 0 ? "Clocked in before these entries" : "No clock-in recorded" });
+          open = null;
+        }
+      });
+      if (open) list.push({ inn: open, open: true });
+
+      var prevEnd = null, prevRaw = null, t = now();
+      list.forEach(function(s) {
+        if (s.gap) return;
+        var a = timeOf(s.inn), b = timeOf(s.out);
+        if (a == null || (s.out && b == null)) { s.note = "A time is missing. Edit it to count this session."; return; }
+
+        var start = floorMin(a);
+        if (prevEnd != null && start < prevEnd && a > prevRaw - MIN) {
+          // Rounding alone made back-to-back sessions share a minute (the clock-out
+          // before may already be logged rounded up): start where the last one ended.
+          start = prevEnd;
+        }
+        if (b != null && b < a) { s.note = "The clock-out is before the clock-in. Edit one of them."; return; }
+        var end = s.open ? Math.max(t, start) : Math.max(ceilMin(b), start);
+        if (end - start >= CAP) {
+          end = start + CAP;
+          s.capped = true;
+        }
+        s.overdue = s.open && s.capped;
+
+        if (prevEnd != null && start < prevEnd) {
+          // A real overlap: count from where the session before ended.
+          s.overlap = Math.min(prevEnd, end) - start;
+          start = Math.min(prevEnd, end);
+        }
+        s.start = start;
+        s.end = end;
+        s.dur = end - start;
+        prevEnd = Math.max(prevEnd || 0, end);
+        prevRaw = Math.max(prevRaw || 0, s.capped ? end : s.open ? t : b);
+      });
+      return list.reverse();
+    }
+
+    // On the clock, unless the open session has already run its 24 hours.
+    function isOn() {
+      var s = sessions[0];
+      return !!state && state.status === "ON" && !(s && s.overdue);
+    }
+
     /* ---------- rendering ---------- */
     function setBusy(b) {
       busy = b;
@@ -398,7 +536,8 @@
     function render(s) {
       if (!s) return;
       state = { status: s.status, logs: s.logs || [] };
-      var on = state.status === "ON";
+      sessions = buildSessions(state.logs);
+      var on = isOn();
 
       document.getElementById("hero").className = "hero" + (on ? " is-on" : "");
       document.getElementById("state-text").textContent = on ? "On the clock" : "Off the clock";
@@ -412,76 +551,130 @@
       renderLogs();
     }
 
+    function tick() {
+      if (!state) return;
+      var s = sessions[0];
+      // Crossing the 24-hour mark changes the whole screen, not just the timer, and
+      // the server has the clock-out to show for it.
+      if (s && s.open && !s.overdue && s.start != null && now() - s.start >= CAP) {
+        render(state);
+        refresh();
+      } else {
+        updateTimer();
+      }
+    }
+
     function updateTimer() {
       if (!state) return;
       var timerEl = document.getElementById("timer");
       var sinceEl = document.getElementById("since");
-      var latest = state.logs[0];
-      var start = latest && latest.at ? new Date(latest.at) : null;
+      var s = sessions[0];
 
-      if (!start || isNaN(start.getTime())) {
-        timerEl.textContent = "0:00:00";
-        sinceEl.textContent = "No entries yet. Clock in to start.";
+      if (isOn()) {
+        if (!s || !s.open || s.start == null) {
+          timerEl.textContent = "-:--:--";
+          sinceEl.textContent = "Your clock-in time is missing. Edit it below.";
+          return;
+        }
+        var secs = Math.max(0, Math.floor((now() - s.start) / 1000));
+        timerEl.textContent = Math.floor(secs / 3600) + ":" + pad(Math.floor((secs % 3600) / 60)) + ":" + pad(secs % 60);
+        sinceEl.textContent = "Since " + fmtAt(s.start);
         return;
       }
 
-      var secs = Math.max(0, Math.floor((now() - start.getTime()) / 1000));
-      timerEl.textContent = secs >= 86400
-        ? Math.floor(secs / 86400) + "d " + Math.floor((secs % 86400) / 3600) + "h"
-        : Math.floor(secs / 3600) + ":" + pad(Math.floor((secs % 3600) / 60)) + ":" + pad(secs % 60);
-
-      var day = fmtDay(start);
-      sinceEl.textContent = (day === "Today" || day === "Yesterday")
-        ? "Since " + fmtTime(start) + " " + day.toLowerCase()
-        : "Since " + day + " at " + fmtTime(start);
+      // Off the clock: show the last finished session, which holds still.
+      var last = null;
+      for (var i = 0; i < sessions.length && !last; i++) {
+        var c = sessions[i];
+        if (c.dur != null && (!c.open || c.overdue) && (c.dur || !c.overlap)) last = c;
+      }
+      if (!last) {
+        timerEl.textContent = fmtDur(0);
+        sinceEl.textContent = state.logs.length ? "Clock in to start." : "No entries yet. Clock in to start.";
+        return;
+      }
+      timerEl.textContent = fmtDur(last.dur);
+      sinceEl.textContent = last.capped
+        ? "Last session, stopped automatically after 24 hours"
+        : "Last session, ended " + fmtAt(last.end);
     }
 
     function renderLogs() {
       var box = document.getElementById("logs");
-      var logs = (state && state.logs) || [];
-      if (!logs.length) {
-        box.innerHTML = "<div class='empty'>No entries yet. Your clock-ins will show up here.</div>";
-        return;
+      box.innerHTML = sessions.length
+        ? sessions.map(renderSession).join("")
+        : "<div class='empty session'>No entries yet. Your sessions will show up here.</div>";
+    }
+
+    function renderSession(s) {
+      var first = shownTime(s.inn || s.out);
+      var day = first != null ? fmtDay(new Date(first)) : "Unknown day";
+      var dur, cls = "s-dur";
+      if (s.open && !s.overdue) { dur = "Running"; cls += " live"; }
+      else if (s.dur != null) dur = fmtDur(s.dur);
+      else { dur = "Not counted"; cls += " none"; }
+
+      var html = "<div class='session'><div class='s-head'><span class='s-day'>" + esc(day) + "</span>";
+      html += "<span class='" + cls + "'>" + esc(dur) + "</span></div>";
+      html += s.inn ? renderEntry(s.inn, day) : renderGap("in", s.gap);
+      html += s.out ? renderEntry(s.out, day)
+        : renderGap("out", s.gap || (s.overdue ? "Stopping at 24 hours" : "Still on the clock"));
+
+      if (s.note) html += "<div class='s-note'>" + esc(s.note) + "</div>";
+      if (s.overlap) {
+        html += "<div class='s-note'>" + esc(s.dur
+          ? "Overlaps the session before by " + fmtDur(s.overlap) + ". Counted from " + fmtTime(new Date(s.start)) + "."
+          : "Falls inside the session before, so it isn't counted.") + "</div>";
       }
+      if (s.capped && !s.open) html += "<div class='s-note quiet'>Stopped automatically after 24 hours.</div>";
+      return html + "</div>";
+    }
 
-      var html = "";
-      logs.forEach(function(item) {
-        var inn = item.action === "in";
-        var d = item.at ? new Date(item.at) : null;
-        var editing = editingRow === item.row;
+    function renderGap(kind, text) {
+      return "<div class='entry " + kind + "'><div class='log-main'>" +
+        "<span class='pill ghost'>" + (kind === "in" ? "In" : "Out") + "</span>" +
+        "<div class='when'><div class='gap'>" + esc(text) + "</div></div></div></div>";
+    }
 
-        // If it was recorded in another zone, also show the time as it was there.
-        var elsewhere = "";
-        if (d && item.tz && item.tz !== DEVICE_TZ) {
-          try {
-            var there = fmtTime(d, item.tz);
-            if (there !== fmtTime(d)) elsewhere = there + " in " + placeName(item.tz);
-          } catch (e) {}
-        }
+    function renderEntry(item, sessionDay) {
+      var inn = item.action === "in";
+      var t = shownTime(item);
+      var d = t != null ? new Date(t) : null;
+      var editing = editingRow === item.row;
 
-        html += "<div class='log'><div class='log-main'>";
-        html += "<span class='pill " + (inn ? "in" : "out") + "'>" + (inn ? "In" : "Out") + "</span>";
-        html += "<div class='when'><div class='t'>" + (d ? esc(fmtTime(d)) : "Missing time") + "</div>";
-        html += "<div class='d'>" + (d ? esc(fmtDay(d)) : "Edit to fix") + "</div>";
-        if (elsewhere) html += "<div class='z'>" + esc(elsewhere) + "</div>";
-        html += "</div>";
-        if (item.pending) html += "<span class='pending'>Saving</span>";
-        else if (!editing) html += "<button class='btn-link' type='button' onclick='startEdit(" + Number(item.row) + ")'>Edit</button>";
-        html += "</div>";
+      // If it was recorded in another zone, also show the time as it was there.
+      var elsewhere = "";
+      if (d && item.tz && item.tz !== DEVICE_TZ) {
+        try {
+          var there = fmtTime(d, item.tz);
+          if (there !== fmtTime(d)) elsewhere = there + " in " + placeName(item.tz);
+        } catch (e) {}
+      }
+      // The session's day is in its header; only mention a day here when it differs.
+      var day = d ? fmtDay(d) : "Edit to fix";
+      if (day === sessionDay) day = "";
 
-        if (editing) {
-          html += "<div class='edit'>";
-          html += "<input id='edit-input' class='field' type='datetime-local' value='" + esc(editValue) +
-                  "' max='" + esc(toLocalInput(new Date(now()))) + "' oninput='editValue=this.value' aria-label='New date and time'>";
-          if (editNote) html += "<div class='note'>" + esc(editNote) + "</div>";
-          html += "<div class='edit-actions'>";
-          html += "<button class='btn btn-ghost' type='button' onclick='cancelEdit()'>Cancel</button>";
-          html += "<button class='btn btn-primary' type='button' onclick='saveEdit()'" + (busy ? " disabled" : "") + ">Save time</button>";
-          html += "</div></div>";
-        }
-        html += "</div>";
-      });
-      box.innerHTML = html;
+      var html = "<div class='entry " + (inn ? "in" : "out") + "'><div class='log-main'>";
+      html += "<span class='pill " + (inn ? "in" : "out") + "'>" + (inn ? "In" : "Out") + "</span>";
+      html += "<div class='when'><div class='t'>" + (d ? esc(fmtTime(d)) : "Missing time") + "</div>";
+      if (day) html += "<div class='d'>" + esc(day) + "</div>";
+      if (elsewhere) html += "<div class='z'>" + esc(elsewhere) + "</div>";
+      html += "</div>";
+      if (item.pending) html += "<span class='pending'>Saving</span>";
+      else if (!editing) html += "<button class='btn-link' type='button' onclick='startEdit(" + Number(item.row) + ")'>Edit</button>";
+      html += "</div>";
+
+      if (editing) {
+        html += "<div class='edit'>";
+        html += "<input id='edit-input' class='field' type='datetime-local' value='" + esc(editValue) +
+                "' max='" + esc(toLocalInput(new Date(now()))) + "' oninput='editValue=this.value' aria-label='New date and time'>";
+        if (editNote) html += "<div class='note'>" + esc(editNote) + "</div>";
+        html += "<div class='edit-actions'>";
+        html += "<button class='btn btn-ghost' type='button' onclick='cancelEdit()'>Cancel</button>";
+        html += "<button class='btn btn-primary' type='button' onclick='saveEdit()'" + (busy ? " disabled" : "") + ">Save time</button>";
+        html += "</div></div>";
+      }
+      return html + "</div>";
     }
 
     /* ---------- setup / screens ---------- */
@@ -542,12 +735,17 @@
         refresh();
       }
 
-      setInterval(updateTimer, 1000);
-      document.addEventListener("visibilitychange", function() {
+      setInterval(tick, 1000);
+      // Coming back to the app after a while quietly picks up changes made elsewhere,
+      // like another device or the 24-hour stop.
+      function refocus() {
         if (document.hidden) return;
         updateTimer();
-        if (Date.now() - lastSync > 15000) refresh();
-      });
+        if (Date.now() - lastSync > STALE_AFTER) refresh();
+      }
+      document.addEventListener("visibilitychange", refocus);
+      window.addEventListener("focus", refocus);
+      window.addEventListener("pageshow", function(ev) { if (ev.persisted) refocus(); });
       window.addEventListener("online", refresh);
 
       if ("serviceWorker" in navigator && location.protocol === "https:") {
