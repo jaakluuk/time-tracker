@@ -8,10 +8,11 @@
  *   D  Local time        Wall-clock time in that zone (real date value, handy for formulas)
  *
  * Times are logged rounded outward to the minute (clock-ins down, clock-outs up), and
- * a session that runs for 24 hours is stopped automatically at the 24-hour mark.
+ * a session that runs for 24 hours is stopped at the 24-hour mark the next time the
+ * app talks to the server.
  *
  * One-time setup: run setupApiToken(), then migrateToUtc(), then roundAllTimes(), then
- * setupAutoStop(), then deploy as a web app (Execute as: Me, Who has access: Anyone).
+ * deploy as a web app (Execute as: Me, Who has access: Anyone).
  */
 
 var HEADERS = ["Timestamp (UTC)", "Action", "Time zone", "Local time"];
@@ -134,11 +135,6 @@ function edit_(row, at) {
   });
 }
 
-/** Runs on a timer (see setupAutoStop) so a forgotten session stops even if the app isn't opened. */
-function autoStopOverdue() {
-  withLock_(function() { autoStop_(getSheet_()); });
-}
-
 // If the latest entry is a clock-in from 24 or more hours ago, clocks out at exactly
 // 24 hours after it (after its rounded time, for entries logged before rounding).
 function autoStop_(sheet) {
@@ -153,15 +149,6 @@ function autoStop_(sheet) {
 }
 
 /* ---------------- One-time setup (run from the editor) ---------------- */
-
-/** Checks for forgotten sessions every hour. Safe to run more than once. */
-function setupAutoStop() {
-  ScriptApp.getProjectTriggers().forEach(function(t) {
-    if (t.getHandlerFunction() === "autoStopOverdue") ScriptApp.deleteTrigger(t);
-  });
-  ScriptApp.newTrigger("autoStopOverdue").timeBased().everyHours(1).create();
-  Logger.log("Sessions left open will now stop automatically after 24 hours.");
-}
 
 /**
  * Rounds every logged time the way new ones are logged, and caps sessions at 24 hours.
